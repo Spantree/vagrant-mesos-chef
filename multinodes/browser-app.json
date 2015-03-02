@@ -1,0 +1,23 @@
+{
+  "container": {
+    "type": "DOCKER",
+    "docker": {
+      "image": "divideby0/shakespeare-browser",
+      "network": "BRIDGE",
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 0,
+          "servicePort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "priviledged": true
+    }
+  },
+  "id": "browser-app",
+  "instances": 2,
+  "cpus": 0.5,
+  "mem": 512,
+  "cmd": "echo \"172.31.2.11 slave1 slave1.mesos\n172.31.2.12 slave2 slave2.mesos\" >> /etc/hosts; /tomcat/bin/catalina.sh run"
+}

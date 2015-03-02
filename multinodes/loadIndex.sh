@@ -1,0 +1,1 @@
+curl -XPUT slave1:9200/_bulk --data-binary @shakespeare.json

@@ -1,0 +1,22 @@
+{
+  "id": "elasticsearch",
+  "container": {
+    "type": "DOCKER",
+    "docker": {
+      "image": "divideby0/elasticsearch",
+      "privileged": true
+    },
+    "volumes": [
+      {
+        "containerPath": "/data",
+        "hostPath": "/var/data/elasticsearch",
+        "mode": "RW"
+      }
+    ]
+  },
+  "instances": 2,
+  "cpus": 0.5,
+  "mem": 512,
+  "constraints": [["hostname", "UNIQUE"]],
+  "cmd": "/elasticsearch/bin/elasticsearch --network.bind_host=$(ip -o 4 addr show eth0 | awk -F '[ /]+' '/global/ {print $4}') --network.publish_host=$(ip -o -4 addr show eth1 | awk -F '[ /]+' '/global/ {print $4}')"
+}

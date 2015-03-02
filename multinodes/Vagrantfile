@@ -1,12 +1,16 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 require 'yaml'
+require 'socket'
 require './lib/gen_node_infos'
+require './lib/get_docker_registry_mirror'
 require './lib/predicates'
 
 base_dir = File.expand_path(File.dirname(__FILE__))
 conf = YAML.load_file(File.join(base_dir, "cluster.yml"))
 ninfos = gen_node_infos(conf)
+
+docker_registry_mirror = get_docker_registry_mirror(conf['docker_registry_mirrors'])
 
 ## vagrant plugins required:
 # vagrant-aws, vagrant-berkshelf, vagrant-omnibus, vagrant-hosts, vagrant-cachier
@@ -28,9 +32,15 @@ Vagrant.configure("2") do |config|
     config.cache.enable :chef
   end
 
+  config.hostmanager.enabled = true
+  config.hostmanager.manage_host = true
+  config.hostmanager.ignore_private_ip = false
+  config.hostmanager.include_offline = true
+
   # define VMs. all VMs has identical configuration.
   [ninfos[:zk], ninfos[:master], ninfos[:slave]].flatten.each_with_index do |ninfo, i|
     config.vm.define ninfo[:hostname] do |cfg|
+      cfg.hostmanager.aliases = ["#{ninfo[:hostname]}.mesos"]
 
       cfg.vm.provider :virtualbox do |vb, override|
         override.vm.hostname = ninfo[:hostname]
@@ -137,6 +147,7 @@ Vagrant.configure("2") do |config|
           }
         elsif slave?(ninfo[:hostname]) then
           chef.add_recipe "mesos::slave"
+          chef.add_recipe "docker"
           chef.json = {
             :mesos => {
               :type         => "mesosphere",
@@ -150,10 +161,15 @@ Vagrant.configure("2") do |config|
                 :ip           => "#{ninfo[:ip]}",
                 :containerizers => "docker,mesos",
                 :isolation => "cgroups/cpu,cgroups/mem",
-                :executor_registration_timeout => "5mins",
+                :executor_registration_timeout => "10mins",
               }
             }
           }
+
+          cfg.vm.provision :shell , :inline => <<-SCRIPT
+            docker pull divideby0/elasticsearch
+            docker pull divideby0/shakespeare-browser
+          SCRIPT
         end
       end
 
@@ -166,6 +182,15 @@ Vagrant.configure("2") do |config|
           sudo -u zookeeper echo #{myid} > /tmp/zookeeper/myid
           sudo -u zookeeper /opt/chef/embedded/bin/ruby /vagrant/scripts/gen_zoo_conf.rb > /etc/zookeeper/conf/zoo.cfg
           sudo restart zookeeper
+        SCRIPT
+      end
+
+      if slave?(ninfo[:hostname]) and docker_registry_mirror then
+        sed_command = "sed -i \"s/^DOCKER_OPTS=.*$/DOCKER_OPTS=--registry-mirror=http:\\/\\/#{docker_registry_mirror}/\" /etc/init.d/docker"
+        puts sed_command
+        config.vm.provision :shell, :inline => <<-SCRIPT
+          sudo #{sed_command}
+          sudo service docker restart
         SCRIPT
       end
 
@@ -184,6 +209,9 @@ Vagrant.configure("2") do |config|
   if conf["marathon_enable"] then
     config.vm.define :marathon do |cfg|
       marathon_ip = conf["marathon_ipbase"]+"11"
+
+      cfg.hostmanager.aliases = ["marathon.mesos"]
+
       cfg.vm.provider :virtualbox do |vb, override|
         override.vm.hostname = "marathon"
         override.vm.network :private_network, :ip => marathon_ip
@@ -242,8 +270,18 @@ Vagrant.configure("2") do |config|
 
       cfg.vm.provision :shell, :privileged => true, :inline => <<-SCRIPT
         mkdir -p /var/log/marathon
+        rm /etc/init.d/marathon
+        echo manual | sudo tee /etc/init/marathon.override
+        service stop marathon
+        curl -O http://downloads.mesosphere.io/marathon/v0.7.6/marathon-0.7.6.tgz
+        tar xzvf marathon-0.7.6.tgz
+        mv marathon-0.7.6 /opt/
         kill -KILL `ps augwx | grep marathon | tr -s " " | cut -d' ' -f2`
-        LIBPROCESS_IP=#{marathon_ip} nohup /opt/marathon/bin/start --master #{"zk://"+ninfos[:zk].map{|zk| zk[:ip]+":2181"}.join(",")+"/mesos"} --zk_hosts #{ninfos[:zk].map{|zk| zk[:ip]+":2181"}.join(",")} > /var/log/marathon/nohup.log 2> /var/log/marathon/nohup.log < /dev/null &
+        LIBPROCESS_IP=#{marathon_ip} nohup /opt/marathon-0.7.6/bin/start --master #{"zk://"+ninfos[:zk].map{|zk| zk[:ip]+":2181"}.join(",")+"/mesos"} --zk_hosts #{ninfos[:zk].map{|zk| zk[:ip]+":2181"}.join(",")} --task_launch_timeout 600000 > /var/log/marathon/nohup.log 2> /var/log/marathon/nohup.log < /dev/null &
+        SCRIPT
+
+      cfg.vm.provision :shell, :privileged => true, :inline => <<-SCRIPT
+        /opt/marathon/bin/haproxy-marathon-bridge install_haproxy_system localhost:8080
         SCRIPT
 
       if conf["chronos_enable"] then

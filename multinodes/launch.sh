@@ -1,0 +1,1 @@
+cat "$@" | http POST http://marathon.mesos:8080/v2/apps "Content-Type: application/json"
